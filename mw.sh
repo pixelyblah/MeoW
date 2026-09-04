@@ -121,7 +121,7 @@ execute_command_mode() {
         w) save_file ;;
         q) exit 0 ;;
         "q!") exit 0 ;;
-        wq|x) save_file; exit 0 ;;
+        wq|x|"wq!") save_file; exit 0 ;;
         "") status_msg="" ;;
         *) status_msg="Unknown command: :$cmd" ;;
     esac
