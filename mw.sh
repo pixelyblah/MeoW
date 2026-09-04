@@ -1,61 +1,76 @@
 #!/bin/bash
 
-# ghostmeow - Pure Bash Vim-like Editor
 FILE="$1"
+[ -z "$FILE" ] && { echo "Usage: mw <filename>"; exit 1; }
 
-if [ -z "$FILE" ]; then
-    echo "Usage: mw <filename>"
-    exit 1
+# Locate script directory and source external syntax engine
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/syntax.sh" ]; then
+    source "$SCRIPT_DIR/syntax.sh"
+else
+    detect_filetype() { filetype="plain"; }
+    highlight_line() { buf+="$1"; }
 fi
 
-# Load file into array buffer
+detect_filetype "$FILE"
+
 lines=()
 if [ -f "$FILE" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
         lines+=("$line")
     done < "$FILE"
 fi
-
-# Initialize if file is empty
 [ ${#lines[@]} -eq 0 ] && lines=("")
 
-# Cursor & State variables
 cursor_r=0
 cursor_c=0
+scroll_top=0
 mode="NORMAL"
 status_msg="\"$FILE\" [${#lines[@]} lines]"
 last_key=""
 
-# Terminal setup & cleanup
 orig_stty=$(stty -g)
 cleanup() {
     stty "$orig_stty"
     clear
-    echo -e "\e[?25h" # Restore cursor visibility
+    echo -e "\e[?25h"
 }
 trap cleanup EXIT
-
 stty raw -echo
 
 redraw() {
-    clear
-    # Print buffer lines
-    for i in "${!lines[@]}"; do
-        echo -e -n "\r${lines[$i]}\r\n"
+    term_rows=$(tput lines)
+    view_height=$((term_rows - 2))
+
+    if [ $cursor_r -lt $scroll_top ]; then
+        scroll_top=$cursor_r
+    elif [ $cursor_r -ge $((scroll_top + view_height)) ]; then
+        scroll_top=$((cursor_r - view_height + 1))
+    fi
+
+    # DOUBLE BUFFERING: Accumulate whole frame in $buf
+    local buf="\033[H"
+
+    for ((i=0; i<view_height; i++)); do
+        line_idx=$((scroll_top + i))
+        buf+="\033[$((i + 1));1H\033[K"
+        if [ $line_idx -lt ${#lines[@]} ]; then
+            highlight_line "${lines[$line_idx]}"
+        else
+            buf+="~"
+        fi
     done
 
     # Status Bar
-    echo -e -n "\r----------------------------------------\r\n"
-    if [ "$mode" == "NORMAL" ]; then
-        echo -e -n "\r\e[7m -- NORMAL -- | $FILE | $status_msg \e[0m\r\n"
-    elif [ "$mode" == "COMMAND" ]; then
-        echo -e -n "\r\e[7m -- COMMAND -- | $FILE | Type w, q, or wq \e[0m\r\n"
-    else
-        echo -e -n "\r\e[7m -- INSERT -- | $FILE | $status_msg \e[0m\r\n"
-    fi
+    buf+="\033[$((term_rows - 1));1H--------------------------------------------------------\033[K"
+    buf+="\033[${term_rows};1H\033[7m -- ${mode} -- | ${FILE} [${filetype}] | ${status_msg}\033[K\033[0m"
 
-    # Position Cursor
-    echo -e -n "\e[$((cursor_r + 1));$((cursor_c + 1))H"
+    # Set Cursor Position
+    screen_r=$((cursor_r - scroll_top + 1))
+    buf+="\033[${screen_r};$((cursor_c + 1))H"
+
+    # Output frame in a single stdout write (Zero Flicker)
+    printf "%b" "$buf"
 }
 
 save_file() {
@@ -80,23 +95,19 @@ delete_current_line() {
 }
 
 execute_command_mode() {
-    redraw
-    # Position cursor at bottom for command entry
-    echo -e -n "\e[$(( ${#lines[@]} + 3 ));1H\r\e[K:"
+    term_rows=$(tput lines)
+    printf "\033[%d;1H\033[K:" "$term_rows"
     
     cmd=""
     while true; do
         IFS= read -rsn1 c
-        # Enter key finishes command
         if [ "$c" == $'\x0a' ] || [ "$c" == "" ]; then
             break
-        # Backspace inside command prompt
         elif [ "$c" == $'\x7f' ] || [ "$c" == $'\x08' ]; then
             if [ ${#cmd} -gt 0 ]; then
                 cmd="${cmd:0:-1}"
                 echo -e -n "\b \b"
             fi
-        # Cancel command on ESC
         elif [ "$c" == $'\x1b' ]; then
             cmd=""
             break
@@ -109,6 +120,7 @@ execute_command_mode() {
     case "$cmd" in
         w) save_file ;;
         q) exit 0 ;;
+        "q!") exit 0 ;;
         wq|x) save_file; exit 0 ;;
         "") status_msg="" ;;
         *) status_msg="Unknown command: :$cmd" ;;
@@ -122,7 +134,6 @@ while true; do
     
     IFS= read -rsn1 key
 
-    # Handle Escape sequences (Arrows & ESC key)
     if [ "$key" == $'\x1b' ]; then
         read -rsn2 -t 0.01 seq
         if [ "$seq" == "[A" ]; then
@@ -138,22 +149,50 @@ while true; do
             mode="NORMAL"
         fi
         
-        # Adjust column bounds if switching lines
         [ $cursor_c -gt ${#lines[$cursor_r]} ] && cursor_c=${#lines[$cursor_r]}
         last_key=""
         continue
     fi
 
-    # MODE: NORMAL
     if [ "$mode" == "NORMAL" ]; then
         case "$key" in
             i) mode="INSERT" ;;
             a) mode="INSERT"; ((cursor_c++)) ;;
+            I) mode="INSERT"; cursor_c=0 ;;
+            A) mode="INSERT"; cursor_c=${#lines[$cursor_r]} ;;
+            o) 
+                lines=("${lines[@]:0:$((cursor_r+1))}" "" "${lines[@]:$((cursor_r+1))}")
+                ((cursor_r++))
+                cursor_c=0
+                mode="INSERT"
+                ;;
+            O)
+                lines=("${lines[@]:0:$cursor_r}" "" "${lines[@]:$cursor_r}")
+                cursor_c=0
+                mode="INSERT"
+                ;;
             h) [ $cursor_c -gt 0 ] && ((cursor_c--)) ;;
             j) [ $cursor_r -lt $((${#lines[@]} - 1)) ] && ((cursor_r++)) ;;
             k) [ $cursor_r -gt 0 ] && ((cursor_r--)) ;;
             l) [ $cursor_c -lt ${#lines[$cursor_r]} ] && ((cursor_c++)) ;;
-            :) execute_command_mode ;;
+            0) cursor_c=0 ;;
+            '$') cursor_c=${#lines[$cursor_r]} ;;
+            G) cursor_r=$((${#lines[@]} - 1)) ;;
+            g)
+                if [ "$last_key" == "g" ]; then
+                    cursor_r=0
+                    last_key=""
+                else
+                    last_key="g"
+                    continue
+                fi
+                ;;
+            x)
+                curr_line="${lines[$cursor_r]}"
+                if [ ${#curr_line} -gt 0 ]; then
+                    lines[$cursor_r]="${curr_line:0:$cursor_c}${curr_line:$((cursor_c+1))}"
+                fi
+                ;;
             d) 
                 if [ "$last_key" == "d" ]; then
                     delete_current_line
@@ -163,32 +202,26 @@ while true; do
                     continue
                 fi
                 ;;
+            :) execute_command_mode ;;
         esac
         
-        # Keep cursor within valid boundary
         [ $cursor_c -gt ${#lines[$cursor_r]} ] && cursor_c=${#lines[$cursor_r]}
-        [ "$key" != "d" ] && last_key=""
+        [ "$key" != "d" ] && [ "$key" != "g" ] && last_key=""
 
-    # MODE: INSERT
     elif [ "$mode" == "INSERT" ]; then
         curr_line="${lines[$cursor_r]}"
         
-        # Backspace handling
         if [ "$key" == $'\x7f' ] || [ "$key" == $'\x08' ]; then
             if [ $cursor_c -gt 0 ]; then
-                # Delete character behind cursor
                 lines[$cursor_r]="${curr_line:0:$((cursor_c-1))}${curr_line:$cursor_c}"
                 ((cursor_c--))
             elif [ $cursor_r -gt 0 ]; then
-                # MERGE LINES (Remove line space/break above)
                 prev_line="${lines[$((cursor_r-1))]}"
                 cursor_c=${#prev_line}
                 lines[$((cursor_r-1))]="${prev_line}${curr_line}"
                 lines=("${lines[@]:0:$cursor_r}" "${lines[@]:$((cursor_r+1))}")
                 ((cursor_r--))
             fi
-
-        # Enter key (Insert line break)
         elif [ "$key" == $'\x0a' ] || [ "$key" == "" ]; then
             left="${curr_line:0:$cursor_c}"
             right="${curr_line:$cursor_c}"
@@ -196,8 +229,6 @@ while true; do
             lines=("${lines[@]:0:$((cursor_r+1))}" "$right" "${lines[@]:$((cursor_r+1))}")
             ((cursor_r++))
             cursor_c=0
-
-        # Typing text
         else
             left="${curr_line:0:$cursor_c}"
             right="${curr_line:$cursor_c}"
