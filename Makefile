@@ -1,9 +1,14 @@
 PREFIX ?= $(HOME)/.local
+BIN := target/release/mw
 
 
-install:
+build:
+	cargo build --release
+
+
+install: build
 	@mkdir -p $(PREFIX)/bin
-	install -m 755 mw.sh $(PREFIX)/bin/mw
+	install -m 755 $(BIN) $(PREFIX)/bin/mw
 
 
 uninstall:
