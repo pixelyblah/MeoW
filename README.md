@@ -7,12 +7,19 @@ it uses a score based system to see what files you use most often so instead of 
 score, you can open that file from any directory just with the name of the file,
 here are the commands for dat thang
 
-Usage: mw <file>          open <file> (type just the name - file memory finds it)
-       mw -h | --help     show the help
-       mw --list          show remembered files by score
-       mw --remove <p>    forget a file
-       mw --score <p> [n] remember <p> at score n (default 100)
-       mw --db            print the db path
+Usage: 
+
+	mw <file>          open <file> (type just the name - file memory finds it)
+
+	mw -h | --help     show the help
+	
+	mw --list          show remembered files by score
+	
+	mw --remove <p>    forget a file
+	
+	mw --score <p> [n] remember <p> at score n (default 100)
+	
+	mw --db            print the db path
 
 
 <img width="228" height="128" alt="cat" src="https://github.com/user-attachments/assets/af1736a0-eec4-4fe9-8827-143f7707dc4e" />
