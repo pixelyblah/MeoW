@@ -336,6 +336,41 @@ fn db_list(db: &Path) {
     }
 }
 
+const TABSTOP: usize = 4;
+
+fn expand_tabs_display(s: &str) -> String {
+    let mut out = String::new();
+    let mut col = 0usize;
+    for c in s.chars() {
+        if c == '\t' {
+            let n = TABSTOP - (col % TABSTOP);
+            for _ in 0..n {
+                out.push(' ');
+            }
+            col += n;
+        } else {
+            out.push(c);
+            col += 1;
+        }
+    }
+    out
+}
+
+fn disp_col(line: &str, max_idx: usize) -> usize {
+    let mut col = 0usize;
+    for (i, c) in line.chars().enumerate() {
+        if i >= max_idx {
+            break;
+        }
+        if c == '\t' {
+            col += TABSTOP - (col % TABSTOP);
+        } else {
+            col += 1;
+        }
+    }
+    col
+}
+
 fn load_lines(path: &str) -> Vec<String> {
     let mut v = Vec::new();
     if let Ok(bytes) = std::fs::read(path) {
@@ -383,7 +418,7 @@ db: PathBuf,
 impl Editor {
     fn new(file: String, db: PathBuf, lines: Vec<String>) -> Editor {
         let filetype = syntax::detect_filetype(&file).to_string();
-        let status_msg = format!("\"{}\" [{} lines]", &file, lines.len());
+        let status_msg = format!("{} lines", lines.len());
         Editor {
             file,
 db,
@@ -474,16 +509,21 @@ db,
             self.scroll_top = self.cursor_r + 1 - self.view_height;
         }
 
-        let mut buf = String::from("\x1b[H");
+        let shape = if self.mode == "INSERT" {
+            "\x1b[6 q"
+        } else {
+            "\x1b[2 q"
+        };
+        let mut buf = String::new();
+        buf.push_str(shape);
+        buf.push_str("\x1b[H");
 
         for i in 0..self.view_height {
             let line_idx = self.scroll_top + i;
             buf.push_str(&format!("\x1b[{};1H\x1b[K", i + 1));
             if line_idx < self.lines.len() {
-                buf.push_str(&syntax::highlight_line(
-                    &self.filetype,
-                    &self.lines[line_idx],
-                ));
+                let shown = expand_tabs_display(&self.lines[line_idx]);
+                buf.push_str(&syntax::highlight_line(&self.filetype, &shown));
             } else {
                 buf.push_str("~");
             }
@@ -495,12 +535,13 @@ db,
             SEP
         ));
         buf.push_str(&format!(
-            "\x1b[{};1H\x1b[7m -- {} -- | {} [{}] | {}\x1b[K\x1b[0m",
-            self.term_rows, self.mode, self.file, self.filetype, self.status_msg
+            "\x1b[{};1H\x1b[7m -- {} -- | {} [{} {}] | {}\x1b[K\x1b[0m",
+            self.term_rows, self.mode, self.file, self.filetype, self.file_size_hint(), self.status_msg
         ));
 
         let screen_r = self.cursor_r - self.scroll_top + 1;
-        buf.push_str(&format!("\x1b[{};{}H", screen_r, self.cursor_c + 1));
+        let screen_c = disp_col(&self.lines[self.cursor_r], self.cursor_c) + 1;
+        buf.push_str(&format!("\x1b[{};{}H", screen_r, screen_c));
 
         emit(&buf);
     }
@@ -554,6 +595,29 @@ db,
             }
         }
         self.clamp();
+    }
+
+    fn file_size_hint(&self) -> String {
+        let mut bytes: usize = 0;
+        for (i, l) in self.lines.iter().enumerate() {
+            if i > 0 {
+                bytes += 1;
+            }
+            bytes += l.len();
+        }
+        bytes += 1;
+        let mut out = String::new();
+        let mut n = bytes;
+        let mut steps = 0;
+        while n >= 1024 && steps < 4 {
+            n /= 1024;
+            steps += 1;
+        }
+        let unit = ["B", "KiB", "MiB", "GiB"];
+        out.push_str(&n.to_string());
+        out.push(' ');
+        out.push_str(unit[steps]);
+        out
     }
 
     fn save_file(&mut self) {

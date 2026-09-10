@@ -3,6 +3,8 @@ pub fn detect_filetype(path: &str) -> &'static str {
         "bash"
     } else if path == "Makefile" || path == "makefile" || path.ends_with(".mk") {
         "make"
+    } else if path.ends_with(".lua") {
+        "lua"
     } else {
         "plain"
     }
@@ -71,9 +73,104 @@ pub fn highlight_line(ft: &str, line: &str) -> String {
             out.push_str(tail);
             return out;
         }
+    } else if ft == "lua" {
+        return highlight_lua(line);
     }
 
     line.to_string()
+}
+
+const LUA_KEYWORDS: [&str; 22] = [
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+    "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
+];
+
+const LUA_BUILTINS: [&str; 32] = [
+    "assert", "collectgarbage", "coroutine", "debug", "dofile", "error", "getmetatable",
+    "io", "ipairs", "load", "loadfile", "math", "next", "os", "package", "pairs", "pcall",
+    "print", "rawequal", "rawget", "rawlen", "rawset", "require", "select", "setmetatable",
+    "string", "table", "tonumber", "tostring", "type", "xpcall", "self",
+];
+
+fn lua_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+fn highlight_lua(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < n {
+        if chars[i] == '-' && i + 1 < n && chars[i + 1] == '-' {
+            out.push_str("\x1b[90m");
+            for k in i..n {
+                out.push(chars[k]);
+            }
+            out.push_str("\x1b[0m");
+            return out;
+        }
+        if chars[i] == '\'' || chars[i] == '"' {
+            let q = chars[i];
+            let mut j = i + 1;
+            while j < n {
+                if chars[j] == '\\' && j + 1 < n {
+                    j += 2;
+                    continue;
+                }
+                if chars[j] == q {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            out.push_str("\x1b[32m");
+            for k in i..j.min(n) {
+                out.push(chars[k]);
+            }
+            out.push_str("\x1b[0m");
+            i = j;
+            continue;
+        }
+        if chars[i].is_ascii_digit() {
+            let mut j = i;
+            while j < n
+                && (chars[j].is_ascii_alphanumeric() || chars[j] == '.')
+            {
+                j += 1;
+            }
+            out.push_str("\x1b[36m");
+            for k in i..j {
+                out.push(chars[k]);
+            }
+            out.push_str("\x1b[0m");
+            i = j;
+            continue;
+        }
+        if lua_word_char(chars[i]) {
+            let mut j = i;
+            while j < n && lua_word_char(chars[j]) {
+                j += 1;
+            }
+            let w: String = chars[i..j].iter().collect();
+            if LUA_KEYWORDS.contains(&w.as_str()) {
+                out.push_str("\x1b[35;1m");
+                out.push_str(&w);
+                out.push_str("\x1b[0m");
+            } else if LUA_BUILTINS.contains(&w.as_str()) {
+                out.push_str("\x1b[34m");
+                out.push_str(&w);
+                out.push_str("\x1b[0m");
+            } else {
+                out.push_str(&w);
+            }
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 fn make_char(c: char) -> bool {
